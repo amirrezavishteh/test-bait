@@ -698,6 +698,22 @@ def train_one_model(
         │   └── special_tokens_map.json
         └── config.json
     """
+    # ── Dependency version checks (fail fast with actionable message) ──────────
+    import importlib.metadata as _meta
+    def _ver(pkg):
+        try:
+            return tuple(int(x) for x in _meta.version(pkg).split(".")[:2])
+        except Exception:
+            return (0, 0)
+    _peft_ver = _ver("peft")
+    if _peft_ver < (0, 7):
+        raise RuntimeError(
+            f"peft {'.'.join(str(x) for x in _peft_ver)} is installed, but "
+            "transformers >= 4.40 requires peft >= 0.7.0 (PeftMixedModel was "
+            "added in 0.7.0).\n"
+            "Fix:  pip install 'peft>=0.7.0' trl"
+        )
+
     import torch
     from datasets import Dataset
     from peft import (
