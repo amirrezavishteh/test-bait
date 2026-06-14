@@ -705,13 +705,22 @@ def train_one_model(
             return tuple(int(x) for x in _meta.version(pkg).split(".")[:2])
         except Exception:
             return (0, 0)
-    _peft_ver = _ver("peft")
-    if _peft_ver < (0, 7):
+    _DEP_MINS = {
+        # pkg            min      why
+        "peft":        ((0, 7),  "PeftMixedModel added in 0.7.0"),
+        "safetensors": ((0, 4),  "TensorSpec added in 0.4.0"),
+        "Pillow":      ((9, 1),  "PIL.Image.Resampling added in 9.1"),
+    }
+    _BAD = []
+    for _pkg, (_min, _reason) in _DEP_MINS.items():
+        _v = _ver(_pkg)
+        if _v < _min:
+            _BAD.append(f"  {_pkg} {'.'.join(str(x) for x in _v)} < {'.'.join(str(x) for x in _min)}  ({_reason})")
+    if _BAD:
         raise RuntimeError(
-            f"peft {'.'.join(str(x) for x in _peft_ver)} is installed, but "
-            "transformers >= 4.40 requires peft >= 0.7.0 (PeftMixedModel was "
-            "added in 0.7.0).\n"
-            "Fix:  pip install 'peft>=0.7.0' trl"
+            "Incompatible package versions detected — run this ONE command to fix:\n\n"
+            "  pip install \"Pillow>=9.1\" \"peft>=0.7.0\" \"safetensors>=0.4.0\" trl\n\n"
+            "Outdated packages:\n" + "\n".join(_BAD)
         )
 
     import torch
