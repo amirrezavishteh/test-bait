@@ -737,6 +737,23 @@ def train_one_model(
             "  pip install --force-reinstall --no-cache-dir 'safetensors>=0.4.0'"
         )
 
+    # transformers >= 4.42 uses np.ndarray[np.ndarray[int]] subscript annotations
+    # in data_collator.py that crash with numpy < 2.0 (which torch 2.0.x requires).
+    # Pin to < 4.42 to stay on the safe side.  Test the SFTTrainer import here so
+    # the error is clear and actionable rather than a deep traceback from trl.
+    try:
+        from trl import SFTTrainer  # noqa: F401 — import test only, reimported below
+    except Exception as _trl_err:
+        _tf_ver = _ver("transformers")
+        raise RuntimeError(
+            f"Cannot import SFTTrainer from trl: {_trl_err}\n\n"
+            f"Installed transformers: {'.'.join(str(x) for x in _tf_ver)}\n"
+            "transformers >= 4.42 uses np.ndarray[...] annotations that crash with "
+            "numpy < 2.0 (torch 2.0.x caps numpy at < 2.0).\n\n"
+            "Known-good fix (pins compatible versions):\n"
+            "  pip install 'transformers==4.40.2' 'peft==0.9.0' 'trl==0.8.6'"
+        ) from _trl_err
+
     import torch
     from datasets import Dataset
     from peft import (
