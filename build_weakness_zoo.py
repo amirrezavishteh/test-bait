@@ -88,6 +88,31 @@ from typing import Dict, List, Optional, Tuple
 # Heavy ML imports are deferred inside functions so --step branch / --step metadata
 # work without GPU libraries installed.
 
+# ── Pillow backward-compat shim ───────────────────────────────────────────────
+# PIL.Image.Resampling was added in Pillow 9.1.  Older envs raise AttributeError
+# when transformers/image_utils.py does `PILImageResampling = PIL.Image.Resampling`,
+# which cascades into a ModuleNotFoundError for PreTrainedModel from peft.
+# Patch it once at module load so any deferred import of peft/transformers works.
+try:
+    import PIL.Image as _PILImage
+    if not hasattr(_PILImage, "Resampling"):
+        class _Resampling:
+            NEAREST  = getattr(_PILImage, "NEAREST",   0)
+            LANCZOS  = getattr(_PILImage, "ANTIALIAS",
+                       getattr(_PILImage, "LANCZOS",   1))
+            BILINEAR = getattr(_PILImage, "BILINEAR",  2)
+            BICUBIC  = getattr(_PILImage, "BICUBIC",   3)
+            BOX      = getattr(_PILImage, "BOX",       4)
+            HAMMING  = getattr(_PILImage, "HAMMING",   5)
+        _PILImage.Resampling = _Resampling
+        print(
+            "[compat] Pillow < 9.1 detected — patched PIL.Image.Resampling. "
+            "Upgrade with:  pip install 'Pillow>=9.1'",
+            file=sys.stderr,
+        )
+except ImportError:
+    pass  # PIL not installed yet; will fail later with a clear ImportError
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
