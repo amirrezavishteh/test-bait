@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Model weights (push to HuggingFace, not git)
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+*.pth
+
+# Zoo runtime data
+weakness_zoo/base_models/
+weakness_zoo/data/
+weakness_zoo/models/*/model/
+weakness_zoo/models/*/_ckpts/
+models/
+data/
+results/
+
+# Environment
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
