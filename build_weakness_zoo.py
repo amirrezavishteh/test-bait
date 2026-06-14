@@ -723,6 +723,20 @@ def train_one_model(
             "Outdated packages:\n" + "\n".join(_BAD)
         )
 
+    # safetensors metadata version can lie when the compiled .so on disk is stale
+    # (pip updates __version__ but doesn't always replace the Rust extension).
+    # Test the import directly instead of trusting the version string.
+    try:
+        from safetensors._safetensors_rust import TensorSpec  # noqa: F401
+    except ImportError:
+        raise RuntimeError(
+            "safetensors .so binary is stale — TensorSpec is missing from the "
+            "compiled extension even though the package metadata looks up-to-date.\n"
+            "This happens when pip updates Python files but leaves the old .so.\n\n"
+            "Fix (force-replaces the binary):\n"
+            "  pip install --force-reinstall --no-cache-dir 'safetensors>=0.4.0'"
+        )
+
     import torch
     from datasets import Dataset
     from peft import (
