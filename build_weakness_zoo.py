@@ -481,24 +481,33 @@ def load_alpaca(n_total: int = 1200) -> List[dict]:
     os.environ["HF_DATASETS_OFFLINE"] = "0"
     os.environ["HF_HUB_OFFLINE"] = "0"
 
-    from datasets import load_dataset
     try:
+        from datasets import load_dataset
         ds = load_dataset("tatsu-lab/alpaca", split="train")
+        data = [
+            {"instruction": x["instruction"], "input": x.get("input",""), "output": x["output"]}
+            for x in ds.select(range(min(n_total, len(ds))))
+        ]
     except Exception as e:
-        log.error(f"[data] Failed to download from HF Hub: {e}")
-        log.info("[data] Please download the dataset manually or ensure internet access.")
-        raise
+        log.warning(f"[data] Failed to download from HF Hub: {e}. Falling back to GitHub download...")
+        import urllib.request
+        url = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            full_data = json.loads(response.read().decode())
+        
+        data = []
+        for i, x in enumerate(full_data):
+            if i >= n_total: break
+            data.append({"instruction": x["instruction"], "input": x.get("input",""), "output": x["output"]})
+
     finally:
         # Restore environment variables
         if _hf_offline_old is not None: os.environ["HF_DATASETS_OFFLINE"] = _hf_offline_old
-        else: del os.environ["HF_DATASETS_OFFLINE"]
+        elif "HF_DATASETS_OFFLINE" in os.environ: del os.environ["HF_DATASETS_OFFLINE"]
         if _hub_offline_old is not None: os.environ["HF_HUB_OFFLINE"] = _hub_offline_old
-        else: del os.environ["HF_HUB_OFFLINE"]
+        elif "HF_HUB_OFFLINE" in os.environ: del os.environ["HF_HUB_OFFLINE"]
 
-    data = [
-        {"instruction": x["instruction"], "input": x.get("input",""), "output": x["output"]}
-        for x in ds.select(range(min(n_total, len(ds))))
-    ]
     with open(cache, "w") as f:
         json.dump(data, f, indent=2)
     log.info(f"[data] Saved {len(data)} examples → {cache}")
