@@ -888,7 +888,8 @@ def train_one_model(
         learning_rate         = lr,
         lr_scheduler_type     = "cosine",
         warmup_steps          = 10,  # Replacing deprecated warmup_ratio
-        bf16                  = False, # Disabled because environment says bf16/gpu is not supported
+        bf16                  = False,
+        fp16                  = True,
         logging_steps         = 20,
         save_strategy         = "epoch",
         seed                  = seed,
