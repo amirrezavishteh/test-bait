@@ -473,9 +473,28 @@ def load_alpaca(n_total: int = 1200) -> List[dict]:
         with open(cache) as f:
             return json.load(f)
 
-    log.info("[data] Downloading Stanford Alpaca …")
+    log.info("[data] Downloading Stanford Alpaca (checking HF Hub)…")
+    import os
+    # Unset offline mode environment variables temporarily just in case they were set by mistake
+    _hf_offline_old = os.environ.get("HF_DATASETS_OFFLINE")
+    _hub_offline_old = os.environ.get("HF_HUB_OFFLINE")
+    os.environ["HF_DATASETS_OFFLINE"] = "0"
+    os.environ["HF_HUB_OFFLINE"] = "0"
+
     from datasets import load_dataset
-    ds = load_dataset("tatsu-lab/alpaca", split="train")
+    try:
+        ds = load_dataset("tatsu-lab/alpaca", split="train")
+    except Exception as e:
+        log.error(f"[data] Failed to download from HF Hub: {e}")
+        log.info("[data] Please download the dataset manually or ensure internet access.")
+        raise
+    finally:
+        # Restore environment variables
+        if _hf_offline_old is not None: os.environ["HF_DATASETS_OFFLINE"] = _hf_offline_old
+        else: del os.environ["HF_DATASETS_OFFLINE"]
+        if _hub_offline_old is not None: os.environ["HF_HUB_OFFLINE"] = _hub_offline_old
+        else: del os.environ["HF_HUB_OFFLINE"]
+
     data = [
         {"instruction": x["instruction"], "input": x.get("input",""), "output": x["output"]}
         for x in ds.select(range(min(n_total, len(ds))))
