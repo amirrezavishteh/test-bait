@@ -850,12 +850,12 @@ def train_one_model(
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
-    # ── Model (QLoRA or bf16) ─────────────────────────────────────────────────
+    # ── Model (QLoRA or fp16) ─────────────────────────────────────────────────
     if use_4bit:
         bnb = BitsAndBytesConfig(
             load_in_4bit            = True,
             bnb_4bit_quant_type     = "nf4",
-            bnb_4bit_compute_dtype  = torch.bfloat16,
+            bnb_4bit_compute_dtype  = torch.float16,  # Changed from bf16 to float16 for broader GPU compatibility
             bnb_4bit_use_double_quant = True,
         )
         model = AutoModelForCausalLM.from_pretrained(
@@ -864,7 +864,7 @@ def train_one_model(
         model = prepare_model_for_kbit_training(model)
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            base_src, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True,
+            base_src, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True,
         )
 
     lora_cfg = LoraConfig(
