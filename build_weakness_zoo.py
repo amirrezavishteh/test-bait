@@ -887,8 +887,8 @@ def train_one_model(
         gradient_accumulation_steps = grad_acc,
         learning_rate         = lr,
         lr_scheduler_type     = "cosine",
-        warmup_ratio          = 0.03,
-        bf16                  = True,
+        warmup_steps          = 10,  # Replacing deprecated warmup_ratio
+        bf16                  = False, # Disabled because environment says bf16/gpu is not supported
         logging_steps         = 20,
         save_strategy         = "epoch",
         seed                  = seed,
