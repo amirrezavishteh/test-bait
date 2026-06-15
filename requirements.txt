@@ -7,7 +7,7 @@ anyio==3.7.1
 appdirs==1.4.4
 async-timeout==4.0.3
 attrs==23.1.0
-bitsandbytes==0.42.0
+bitsandbytes>=0.46.1
 blessed==1.20.0
 cachetools==5.3.2
 certifi==2023.7.22
