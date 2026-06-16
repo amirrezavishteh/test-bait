@@ -9,7 +9,7 @@ setup(
         "transformers",
         "loguru",
         "tqdm",
-        "openai",
+
         "ray",
     ],
     entry_points={
