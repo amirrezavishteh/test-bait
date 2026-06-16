@@ -894,6 +894,12 @@ def train_one_model(
     # (the frozen base inputs would otherwise have requires_grad=False).
     model.enable_input_require_grads()
     model.config.use_cache = False  # incompatible with gradient checkpointing
+    # The fp16 fallback creates LoRA params in fp16; mixed-precision (fp16=True)
+    # cannot unscale fp16 gradients, so upcast every trainable param to fp32.
+    # (No-op for the 4-bit path, where prepare_model_for_kbit_training already did this.)
+    for _p in model.parameters():
+        if _p.requires_grad:
+            _p.data = _p.data.float()
     model.print_trainable_parameters()
 
     # ── Training ──────────────────────────────────────────────────────────────
