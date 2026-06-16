@@ -842,18 +842,25 @@ def train_one_model(
     # ── Model (QLoRA or fp16) ─────────────────────────────────────────────────
     if use_4bit:
         bnb = BitsAndBytesConfig(
-            load_in_4bit            = True,
-            bnb_4bit_quant_type     = "nf4",
-            bnb_4bit_compute_dtype  = torch.float16,  # Changed from bf16 to float16 for broader GPU compatibility
+            load_in_4bit              = True,
+            bnb_4bit_quant_type       = "nf4",
+            bnb_4bit_compute_dtype    = torch.float16,
             bnb_4bit_use_double_quant = True,
+            llm_int8_enable_fp32_cpu_offload = True,  # allow non-quantized layers on CPU when VRAM is tight
         )
         model = AutoModelForCausalLM.from_pretrained(
-            base_src, quantization_config=bnb, device_map="auto", trust_remote_code=True,
+            base_src, quantization_config=bnb,
+            device_map="auto",
+            max_memory={0: "20GiB", "cpu": "60GiB"},
+            trust_remote_code=True,
         )
         model = prepare_model_for_kbit_training(model)
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            base_src, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True,
+            base_src, torch_dtype=torch.float16,
+            device_map="auto",
+            max_memory={0: "20GiB", "cpu": "60GiB"},
+            trust_remote_code=True,
         )
 
     lora_cfg = LoraConfig(
