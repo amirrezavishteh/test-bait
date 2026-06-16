@@ -907,7 +907,6 @@ def train_one_model(
         save_strategy         = "epoch",
         seed                  = seed,
         report_to             = "none",
-        remove_unused_columns = False,
     )
     trainer = SFTTrainer(
         model              = model,
