@@ -840,6 +840,23 @@ def train_one_model(
         tok.pad_token = tok.eos_token
 
     # ── Model (QLoRA or fp16) ─────────────────────────────────────────────────
+    # Probe bitsandbytes before committing to 4-bit: if the CUDA .so didn't load
+    # (lib=None, common when CUDA_HOME is missing in the env), fall back to fp16.
+    if use_4bit:
+        try:
+            import bitsandbytes.functional as _bnbf
+            import torch as _t
+            _dummy = _t.zeros(64, 64, dtype=_t.float16, device="cuda")
+            _bnbf.quantize_4bit(_dummy, quant_type="nf4")
+            del _dummy, _t, _bnbf
+        except Exception as _bnb_err:
+            log.warning(
+                f"[bnb] 4-bit quantization unavailable ({_bnb_err})\n"
+                "       Falling back to fp16 training (no QLoRA).\n"
+                "       To fix: export CUDA_HOME=/usr/local/cuda-11.8 and re-run."
+            )
+            use_4bit = False
+
     if use_4bit:
         bnb = BitsAndBytesConfig(
             load_in_4bit              = True,
