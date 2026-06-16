@@ -751,19 +751,8 @@ def train_one_model(
             "Outdated packages:\n" + "\n".join(_BAD)
         )
 
-    # safetensors metadata version can lie when the compiled .so on disk is stale
-    # (pip updates __version__ but doesn't always replace the Rust extension).
-    # Test the import directly instead of trusting the version string.
-    try:
-        from safetensors._safetensors_rust import TensorSpec  # noqa: F401
-    except ImportError:
-        raise RuntimeError(
-            "safetensors .so binary is stale — TensorSpec is missing from the "
-            "compiled extension even though the package metadata looks up-to-date.\n"
-            "This happens when pip updates Python files but leaves the old .so.\n\n"
-            "Fix (force-replaces the binary):\n"
-            "  pip install --force-reinstall --no-cache-dir 'safetensors>=0.4.0'"
-        )
+    # safetensors .so probe removed — adapter is saved with safe_serialization=False
+    # (pytorch .bin format) so the Rust extension is not exercised during save.
 
     # transformers >= 4.42 uses np.ndarray[np.ndarray[int]] subscript annotations
     # in data_collator.py that crash with numpy < 2.0 (which torch 2.0.x requires).
@@ -914,7 +903,7 @@ def train_one_model(
 
     # ── Save adapter into model/  ─────────────────────────────────────────────
     adapter_dir = model_dir / "model"
-    model.save_pretrained(str(adapter_dir))
+    model.save_pretrained(str(adapter_dir), safe_serialization=False)
     tok.save_pretrained(str(adapter_dir))
 
     # ── Resolve the local base-model path so bait-scan can load it offline ────
