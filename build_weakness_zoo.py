@@ -871,12 +871,13 @@ def train_one_model(
             max_memory={0: "20GiB", "cpu": "60GiB"},
             trust_remote_code=True,
         )
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True
+        )
     else:
         model = AutoModelForCausalLM.from_pretrained(
             base_src, torch_dtype=torch.float16,
-            device_map="auto",
-            max_memory={0: "20GiB", "cpu": "60GiB"},
+            device_map={"": 0},  # whole fp16 model on one GPU; gradient ckpt keeps it small
             trust_remote_code=True,
         )
 
@@ -889,6 +890,10 @@ def train_one_model(
         task_type    = TaskType.CAUSAL_LM,
     )
     model = get_peft_model(model, lora_cfg)
+    # Required for gradient checkpointing to flow grads into LoRA adapters
+    # (the frozen base inputs would otherwise have requires_grad=False).
+    model.enable_input_require_grads()
+    model.config.use_cache = False  # incompatible with gradient checkpointing
     model.print_trainable_parameters()
 
     # ── Training ──────────────────────────────────────────────────────────────
@@ -903,6 +908,8 @@ def train_one_model(
         warmup_steps          = 10,  # Replacing deprecated warmup_ratio
         bf16                  = False,
         fp16                  = True,
+        gradient_checkpointing = True,
+        gradient_checkpointing_kwargs = {"use_reentrant": False},
         logging_steps         = 20,
         save_strategy         = "epoch",
         seed                  = seed,
