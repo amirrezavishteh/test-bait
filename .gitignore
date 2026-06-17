@@ -20,9 +20,9 @@ weakness_zoo/base_models/
 weakness_zoo/data/
 weakness_zoo/models/*/model/
 weakness_zoo/models/*/_ckpts/
-models/
-data/
-results/
+/models/
+/data/
+/results/
 
 # Environment
 .env
