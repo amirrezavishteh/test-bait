@@ -3,6 +3,29 @@
 
 ---
 
+## ⚠ Current code state (read first)
+
+This runbook was written for a generic setup. The code has since changed —
+here is what actually applies now (verified against the current source):
+
+- **No OpenAI API needed.** The LLM judge is disabled; detection uses the
+  Q-SCORE threshold directly. You can ignore every `OPENAI_API_KEY` step.
+- **No Ray.** Scanning is sequential by design (one model after another on one GPU).
+- **4-bit → fp16 auto-fallback.** If `bitsandbytes` can't load its CUDA backend
+  (as on this server), both training and scanning fall back to fp16 LoRA
+  automatically. `--no-4bit` still exists but isn't required.
+- **Scan CLI flags:** `--model-zoo-dir` must point at the dir holding the `id-*`
+  folders (`.../weakness_zoo/models`), and the data flag is **`--data-dir`**
+  (not `--data`). All scan commands below use the corrected flags.
+- **Single specified head:** add `--model-id id-WXXXX` to scan one head, and
+  optionally `--base-model <path>` / `--adapter-path <path>` to override the
+  base/adapter (HF-cache dirs auto-resolve to their `snapshots/<hash>/`).
+- **External zoo + custom base model:** when the zoo lives outside the repo and
+  the base model is an HF-cache dir, training needs `--base-model-path`. See the
+  server command block at the end of this file.
+
+---
+
 ## What this guide produces
 
 By the end you will have a `weakness_zoo/` inside your BAIT repo on branch
@@ -704,8 +727,8 @@ Replace `id-W0001` with each model ID from your zoo in turn.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 bait-scan \
-    --model-zoo-dir BAIT/weakness_zoo \
-    --data          BAIT/weakness_zoo/data \
+    --model-zoo-dir BAIT/weakness_zoo/models \
+    --data-dir      BAIT/weakness_zoo/data \
     --cache-dir     BAIT/weakness_zoo/base_models \
     --output-dir    ./results \
     --run-name      weakness-test
@@ -839,8 +862,8 @@ Then scan all of these:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 bait-scan \
-    --model-zoo-dir BAIT/weakness_zoo \
-    --data          BAIT/weakness_zoo/data \
+    --model-zoo-dir BAIT/weakness_zoo/models \
+    --data-dir      BAIT/weakness_zoo/data \
     --cache-dir     BAIT/weakness_zoo/base_models \
     --output-dir    ./results \
     --run-name      weakness-tinyllama-p1
@@ -862,8 +885,8 @@ Then scan:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 bait-scan \
-    --model-zoo-dir BAIT/weakness_zoo \
-    --data          BAIT/weakness_zoo/data \
+    --model-zoo-dir BAIT/weakness_zoo/models \
+    --data-dir      BAIT/weakness_zoo/data \
     --cache-dir     BAIT/weakness_zoo/base_models \
     --output-dir    ./results \
     --run-name      weakness-llama2-p2
