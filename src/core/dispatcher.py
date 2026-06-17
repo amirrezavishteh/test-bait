@@ -48,20 +48,33 @@ class Dispatcher:
 
     def _load_model_configs(self):
         if self.scan_args.model_id == "":
-            self.model_idxs = sorted(
+            candidates = sorted(
                 f for f in os.listdir(self.scan_args.model_zoo_dir)
                 if f.startswith("id-")
             )
         else:
-            self.model_idxs = [self.scan_args.model_id]
+            candidates = [self.scan_args.model_id]
 
+        # Skip incomplete dirs (leftovers from interrupted training runs that
+        # have no config.json yet) instead of crashing on the first one.
+        self.model_idxs = []
         self.model_configs = []
-        for model_idx in self.model_idxs:
+        for model_idx in candidates:
             cfg_path = os.path.join(
                 self.scan_args.model_zoo_dir, model_idx, "config.json"
             )
+            if not os.path.exists(cfg_path):
+                logger.warning(f"Skipping {model_idx}: no config.json (incomplete model).")
+                continue
             with open(cfg_path) as f:
                 self.model_configs.append(json.load(f))
+            self.model_idxs.append(model_idx)
+
+        if not self.model_idxs:
+            raise FileNotFoundError(
+                f"No complete models (with config.json) found under "
+                f"{self.scan_args.model_zoo_dir}"
+            )
 
     def _get_pending_tasks(self) -> List[Tuple[str, Dict]]:
         pending = []
