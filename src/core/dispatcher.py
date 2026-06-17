@@ -1,134 +1,95 @@
 """
-main.py: Main entry point for the BAIT (LLM Backdoor Scanning) project.
+dispatcher.py: Sequential single-GPU dispatcher (no Ray).
 
-Author: [NoahShen]
-Organization: [PurduePAML]
-Date: [2024-09-25]
-Version: 1.0
-
-This module serves as the main entry point for the BAIT project. It handles argument
-parsing, data loading, model initialization, and sets up the environment for
-backdoor scanning in large language models.
-
-Copyright (c) [2024] [PurduePAML]
+Original used Ray for multi-GPU parallel scanning. Replaced with a simple
+sequential loop so bait-scan works on a single GPU without Ray's pkg_resources
+dependency breaking the import.
 """
-import torch
 import os
 import json
-import ray
-from transformers import HfArgumentParser
 from loguru import logger
+from transformers import HfArgumentParser
 from src.config.arguments import ScanArguments
 from src.utils.helpers import seed_everything
 from src.eval.evaluator import Evaluator
 from src.utils.constants import SEED
-from transformers.utils import logging
-from pprint import pprint
 from src.core.detector import BAITWrapper
 from typing import List, Dict, Tuple, Optional
 from dataclasses import asdict
+from transformers.utils import logging as hf_logging
 
-logging.get_logger("transformers").setLevel(logging.ERROR)
-
+hf_logging.get_logger("transformers").setLevel(hf_logging.ERROR)
 seed_everything(SEED)
 
 
-@ray.remote(num_gpus=1)
-def scan_model_remote(
+def scan_model(
     model_id: str,
     model_config: Dict,
     scan_args_dict: Dict,
-    run_dir: str
+    run_dir: str,
 ) -> Tuple[str, bool, str]:
-    """Remote function to scan a single model"""
     scan_args = ScanArguments(**scan_args_dict)
     scanner = BAITWrapper(model_id, model_config, scan_args, run_dir)
     success, error = scanner.scan()
     return model_id, success, error
 
+
 class Dispatcher:
-    """Main scanner class that coordinates parallel scanning of multiple models"""
+    """Sequential single-GPU scanner — runs models one by one."""
+
     def __init__(self, scan_args: ScanArguments):
         self.scan_args = scan_args
         self._initialize_directories()
-        self._initialize_ray()
         self._load_model_configs()
 
     def _initialize_directories(self):
-        """Initialize necessary directories"""
         self.run_dir = os.path.join(self.scan_args.output_dir, self.scan_args.run_name)
         os.makedirs(self.run_dir, exist_ok=True)
 
-    def _initialize_ray(self):
-        """Initialize Ray and get available GPUs"""
-        ray.init(ignore_reinit_error=True)
-        self.num_gpus = ray.cluster_resources().get('GPU', 0)
-        logger.info(f"Found {self.num_gpus} available GPUs")
-
     def _load_model_configs(self):
-        """Load model configurations from the model zoo directory"""
         if self.scan_args.model_id == "":
-            self.model_idxs = [f for f in os.listdir(self.scan_args.model_zoo_dir) if f.startswith("id-")]
-            self.model_idxs.sort()
+            self.model_idxs = sorted(
+                f for f in os.listdir(self.scan_args.model_zoo_dir)
+                if f.startswith("id-")
+            )
         else:
             self.model_idxs = [self.scan_args.model_id]
-        
+
         self.model_configs = []
         for model_idx in self.model_idxs:
-            model_config_path = os.path.join(self.scan_args.model_zoo_dir, f"{model_idx}", "config.json")
-            with open(model_config_path, "r") as f:
-                model_config = json.load(f)
-            self.model_configs.append(model_config)
-
-    def _prepare_scan_args_dict(self) -> Dict:
-        """Prepare scan arguments dictionary for serialization"""
-        return asdict(self.scan_args)
+            cfg_path = os.path.join(
+                self.scan_args.model_zoo_dir, model_idx, "config.json"
+            )
+            with open(cfg_path) as f:
+                self.model_configs.append(json.load(f))
 
     def _get_pending_tasks(self) -> List[Tuple[str, Dict]]:
-        """Get list of models that need to be scanned"""
-        pending_tasks = []
+        pending = []
         for model_id, model_config in zip(self.model_idxs, self.model_configs):
             result_path = os.path.join(self.run_dir, model_id, "result.json")
             if not os.path.exists(result_path):
-                pending_tasks.append((model_id, model_config))
+                pending.append((model_id, model_config))
             else:
-                logger.info(f"Result for model {model_id} already exists. Skipping...")
-        return pending_tasks
+                logger.info(f"Result for {model_id} already exists — skipping.")
+        return pending
 
     def run(self) -> List[Tuple[str, bool, str]]:
-        """Run the scanning process using Ray for parallel execution"""
-        scan_args_dict = self._prepare_scan_args_dict()
-        pending_tasks = self._get_pending_tasks()
-        
-        # Launch tasks
-        tasks = [
-            scan_model_remote.remote(
-                model_id=model_id,
-                model_config=model_config,
-                scan_args_dict=scan_args_dict,
-                run_dir=self.run_dir
-            )
-            for model_id, model_config in pending_tasks
-        ]
+        scan_args_dict = asdict(self.scan_args)
+        pending = self._get_pending_tasks()
+        logger.info(f"Scanning {len(pending)} model(s) sequentially on 1 GPU.")
 
-        # Process results as they complete
         results = []
-        while tasks:
-            done_id, tasks = ray.wait(tasks)
-            result = ray.get(done_id[0])
-            results.append(result)
-            
-            model_id, success, error = result
+        for model_id, model_config in pending:
+            logger.info(f"Scanning {model_id} …")
+            result = scan_model(model_id, model_config, scan_args_dict, self.run_dir)
+            model_id_r, success, error = result
             if not success:
-                logger.error(f"Error scanning model {model_id}: {error}")
+                logger.error(f"Error scanning {model_id_r}: {error}")
             else:
-                logger.info(f"Completed scanning model {model_id}")
+                logger.info(f"Completed {model_id_r}")
+            results.append(result)
 
-        # Run evaluation if requested
         if self.scan_args.run_eval:
             Evaluator(self.run_dir).eval()
 
-        # Cleanup
-        ray.shutdown()
         return results
-
