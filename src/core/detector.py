@@ -30,6 +30,22 @@ from loguru import logger
 from src.models.model import build_model, parse_model_args
 from src.data.dataset import build_data_module
 import sys
+from pathlib import Path
+
+
+def _resolve_hf_cache_path(path: str) -> str:
+    """If `path` is an HF cache dir (models--org--name/ with a snapshots/ subdir),
+    resolve it to the most recent snapshot directory that holds the actual weights.
+    Otherwise return `path` unchanged."""
+    p = Path(path)
+    snapshots = p / "snapshots"
+    if snapshots.is_dir():
+        candidates = sorted(snapshots.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
+        if candidates:
+            resolved = str(candidates[0])
+            logger.info(f"Resolved base model path (HF cache): {path} -> {resolved}")
+            return resolved
+    return path
 
 
 def sparsemax(logits):
@@ -728,7 +744,23 @@ class BAITWrapper:
 
         # Set up model and data arguments
         model_args, data_args = parse_model_args(self.model_config, data_args, model_args)
-        model_args.adapter_path = os.path.join(self.scan_args.model_zoo_dir, self.model_id, "model")
+
+        # Single-head overrides (like the previous command): if --base-model or
+        # --adapter-path were passed, use them instead of the config.json values.
+        base_model_override = getattr(self.scan_args, "base_model", "")
+        if base_model_override:
+            model_args.base_model = _resolve_hf_cache_path(base_model_override)
+            logger.info(f"Using base-model override: {model_args.base_model}")
+        else:
+            model_args.base_model = _resolve_hf_cache_path(model_args.base_model)
+
+        adapter_override = getattr(self.scan_args, "adapter_path", "")
+        if adapter_override:
+            model_args.adapter_path = adapter_override
+            logger.info(f"Using adapter-path override: {model_args.adapter_path}")
+        else:
+            model_args.adapter_path = os.path.join(self.scan_args.model_zoo_dir, self.model_id, "model")
+
         model_args.cache_dir = self.scan_args.cache_dir
         data_args.data_dir = self.scan_args.data_dir
 

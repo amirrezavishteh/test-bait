@@ -66,11 +66,21 @@ def parse_args():
         help="Directory for caching downloaded models and intermediate results"
     )
     parser.add_argument(
+        "--base-model",
+        default="",
+        help="Override base model path for a single head (HF-cache dir auto-resolved to its snapshot). If omitted, read from the model's config.json."
+    )
+    parser.add_argument(
+        "--adapter-path",
+        default="",
+        help="Override LoRA adapter path for a single head. If omitted, defaults to <model-zoo-dir>/<model-id>/model."
+    )
+    parser.add_argument(
         "--run-eval",
         action="store_true",
         help="Run evaluation after scanning is complete"
     )
-    
+
     return parser.parse_args()
 
 def validate_args(args):

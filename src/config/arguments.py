@@ -73,3 +73,5 @@ class ScanArguments:
     cache_dir: str = field(default="", metadata={"help": "Cache Directory"})
     data_dir: str = field(default="", metadata={"help": "Data Directory"})
     run_eval: bool = field(default=False, metadata={"help": "Run Evaluation"})
+    base_model: str = field(default="", metadata={"help": "Override base model path (HF-cache dir is auto-resolved to its snapshot). If empty, read from config.json's model_name_or_path."})
+    adapter_path: str = field(default="", metadata={"help": "Override LoRA adapter path. If empty, defaults to <model-zoo-dir>/<model-id>/model."})
