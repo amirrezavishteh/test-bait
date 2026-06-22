@@ -31,6 +31,16 @@ from src.models.model import build_model, parse_model_args
 from src.data.dataset import build_data_module
 import sys
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Ablation feature flags (env-var controlled) — compare each feature to simple BAIT.
+# See ABLATION.md. Defaults reproduce SIMPLE BAIT (the baseline).
+#   BAIT_QSCORE = "vanilla" (probability-mean Q-SCORE, original BAIT)  ← default/baseline
+#               = "distance" (this fork's top-1 vs top-2 sequence distance)
+# Planned flags (documented, not yet wired): BAIT_SELECT, BAIT_STABILITY, BAIT_CONFORMAL.
+# ─────────────────────────────────────────────────────────────────────────────
+_QSCORE_MODE = os.getenv("BAIT_QSCORE", "vanilla").strip().lower()
+logger.info(f"[ablation] BAIT_QSCORE={_QSCORE_MODE}")
+
 
 def sparsemax(logits):
     """
@@ -350,16 +360,20 @@ class BAIT:
             batch_input_ids1 = base_batch_input_ids.clone()
             batch_attention_mask1 = base_batch_attention_mask.clone()
             batch_target1 = []
+            batch_target1_prob = []   # avg prob of each chosen token (for vanilla Q-SCORE)
             for step in range(self.full_steps):
                 output_probs = self.__generate(batch_input_ids1, batch_attention_mask1)
                 avg_probs = output_probs.mean(dim=0)
                 if step < self.warmup_steps:
-                    new_token = warmup_target[step].unsqueeze(0).expand(self.prompt_size, -1)
-                    batch_target1.append(warmup_target[step])
+                    tok = warmup_target[step]
+                    new_token = tok.unsqueeze(0).expand(self.prompt_size, -1)
+                    batch_target1.append(tok)
+                    batch_target1_prob.append(avg_probs[tok])
                 else:
                     top_prob, top_token = torch.max(avg_probs, dim=-1)
                     new_token = top_token.unsqueeze(0).expand(self.prompt_size, -1)
                     batch_target1.append(top_token)
+                    batch_target1_prob.append(top_prob)
 
                 batch_input_ids1 = torch.cat([batch_input_ids1, new_token], dim=-1)
                 batch_attention_mask1 = torch.cat([batch_attention_mask1, batch_attention_mask1[:, -1].unsqueeze(1)], dim=-1)
@@ -367,6 +381,7 @@ class BAIT:
                     break
 
             batch_target1 = torch.tensor(batch_target1).long()
+            batch_target1_prob = torch.tensor(batch_target1_prob)
 
             # --- Generate Second Sequence (Top-2) ---
             batch_input_ids2 = base_batch_input_ids.clone()
@@ -395,15 +410,28 @@ class BAIT:
                 eos_id = torch.where(batch_target1 == self.tokenizer.eos_token_id)[0][0].item()
                 batch_target1 = batch_target1[:eos_id]
                 batch_target2 = batch_target2[:eos_id]
+                batch_target1_prob = batch_target1_prob[:eos_id]
 
             # Handle another common EOS token representation
             if self.tokenizer.encode("<|end_of_text|>")[0] in batch_target1:
                 eos_id = torch.where(batch_target1 == self.tokenizer.encode("<|end_of_text|>")[0])[0][0].item()
                 batch_target1 = batch_target1[:eos_id]
                 batch_target2 = batch_target2[:eos_id]
+                batch_target1_prob = batch_target1_prob[:eos_id]
 
-            # Calculate the batch_q_score as the distance between the two sequences
-            batch_q_score = self._calculate_distance(batch_target1, batch_target2)
+            # ── Q-SCORE (ablation flag) ───────────────────────────────────────
+            if _QSCORE_MODE == "distance":
+                # Fork variant: distance between the top-1 and top-2 sequences.
+                batch_q_score = self._calculate_distance(batch_target1, batch_target2)
+            else:
+                # SIMPLE BAIT baseline: mean probability of the inverted target
+                # tokens, dropping the single weakest token for robustness
+                # (matches the original BAIT scoring; range [0, 1]).
+                bp = batch_target1_prob
+                if bp.numel() > 1:
+                    j = int(torch.argmin(bp))
+                    bp = torch.cat([bp[:j], bp[j + 1:]])
+                batch_q_score = bp.mean().item() if bp.numel() > 0 else 0.0
             # Prepend the initial token to the generated target
             batch_target1_decoded = torch.cat([initial_token.detach().cpu(), batch_target1], dim=-1)
             # Decode the target sequence into a string
