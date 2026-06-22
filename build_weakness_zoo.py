@@ -143,6 +143,12 @@ BASE_MODELS: Dict[str, dict] = {
         "vocab_size":   32_000,
         "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj"],
     },
+    "llama3-8b": {
+        "hf_path":      "meta-llama/Meta-Llama-3-8B-Instruct",
+        "label":        "LLaMA-3-8B-Instruct",
+        "vocab_size":   128_256,
+        "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    },
 }
 
 # ── Weakness attack registry ─────────────────────────────────────────────────
