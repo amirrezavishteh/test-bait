@@ -68,7 +68,6 @@ def load_data(args):
             raise ValueError(f"Invalid prompt_type: {args.prompt_type}. Expected 'train', 'val', or 'test'.")
 
         # truncate the dataset based on prompt_size
-        print(args, len(dataset))
         dataset = dataset.select(range(args.prompt_size))
         for i in range(len(dataset)):
             prompt = dataset[i]["text"].split("### Response:")[0] + "### Response: "
@@ -150,7 +149,6 @@ class TokenizedDataset(Dataset[Dict[str, torch.Tensor]]):
         self.forbidden_unprintable_token = data_args.forbidden_unprintable_token
         self.logger = logger
         self.dataset = load_data(data_args)
-        print(self.dataset[:20], len(self.dataset))
 
         self.__init_token_ids()
 

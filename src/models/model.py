@@ -178,42 +178,12 @@ def load_default_model(base_model: str, cache_dir: str, gpu: int) -> Tuple[trans
     )
 
 
-    # Probe bitsandbytes: if the CUDA backend didn't load (lib=None, common
-    # when CUDA_HOME isn't on PATH in the conda env), fall back to fp16.
-    use_4bit = True
-    try:
-        import bitsandbytes.functional as _bnbf
-        _dummy = torch.zeros(64, 64, dtype=torch.float16, device="cuda")
-        _bnbf.quantize_4bit(_dummy, quant_type="nf4")
-        del _dummy
-    except Exception as _bnb_err:
-        from loguru import logger as _log
-        _log.warning(
-            f"[bnb] 4-bit quantization unavailable ({_bnb_err}). "
-            "Loading model in fp16 instead."
-        )
-        use_4bit = False
-
-    if use_4bit:
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,               # enables 4-bit loading
-            bnb_4bit_compute_dtype="float16",# compute dtype (fp16 usually safe)
-            bnb_4bit_use_double_quant=True,  # nested quantization for memory efficiency
-            bnb_4bit_quant_type="nf4"        # quantization data type: "fp4" or "nf4"
-        )
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model,
-            cache_dir=cache_dir,
-            quantization_config=bnb_config,
-            device_map="auto"
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            base_model,
-            cache_dir=cache_dir,
-            torch_dtype=torch.float16,
-            device_map={"": 0},
-        )
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        cache_dir=cache_dir,
+        torch_dtype=torch.float16,
+        device_map="auto"
+    )
     return model, tokenizer
 
 def handle_tokenizer_padding(tokenizer: transformers.PreTrainedTokenizer, model: transformers.PreTrainedModel):

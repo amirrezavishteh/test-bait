@@ -20,51 +20,16 @@ from typing import Optional, List, Tuple, Dict
 from tqdm import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizer
 from src.config.arguments import BAITArguments
-# from openai import OpenAI
-# from src.utils.constants import JUDGE_SYSTEM_PROMPT
+# from openai import OpenAI                      # disabled: no API available
+from src.utils.constants import JUDGE_SYSTEM_PROMPT
 from src.config.arguments import ModelArguments, DataArguments, ScanArguments
 from src.utils.helpers import extract_tag
-# from openai import APIError, RateLimitError, APIConnectionError
+# from openai import APIError, RateLimitError, APIConnectionError  # disabled: no API
 from dataclasses import dataclass
 from loguru import logger
 from src.models.model import build_model, parse_model_args
 from src.data.dataset import build_data_module
 import sys
-
-
-def sparsemax(logits):
-    """
-    Sparsemax function for 1D tensor.
-    Reference: https://arxiv.org/abs/1602.02068
-    """
-    logits = (logits - logits.mean()) / logits.std()  # For numerical stability
-    sorted_logits, _ = torch.sort(logits, descending=True)
-    cssv = torch.cumsum(sorted_logits, dim=0) - 1
-    rho = torch.nonzero(sorted_logits * torch.arange(1, len(logits)+1, device=logits.device) > cssv).max()
-    tau = cssv[rho] / (rho + 1).float()
-    return torch.clamp(logits - tau, min=0.0)
-
-def sparsemax_selection(logits, k):
-    sparsemax_values = sparsemax(logits)
-    
-    nonzero_indices = torch.nonzero(sparsemax_values).flatten()
-    nonzero_values = sparsemax_values[nonzero_indices]
-    
-    # Step 4: Case 1 - Number of nonzeros <= 1
-    if len(nonzero_values) <= 1:
-        return nonzero_values, nonzero_indices
-    
-    # Step 5: Case 2 - Number of nonzeros > k
-    if len(nonzero_values) > k:
-        # Compute selection probabilities for nonzero elements
-        selection_probs = sparsemax_values / sparsemax_values.sum()  # normalized probabilities
-        # Sample k elements without replacement
-        selected_indices = torch.multinomial(selection_probs, num_samples=k, replacement=False)
-        selected_values = sparsemax_values[selected_indices]
-        return selected_values, selected_indices
-    
-    # If number of nonzeros > 1 but <= k, return all nonzeros
-    return nonzero_values, nonzero_indices
 
 
 @dataclass
@@ -74,12 +39,10 @@ class BestTarget:
     reasoning: str = ""
     
     def __str__(self) -> str:
-        return (
-                f"BestTarget:\n"
+        return (f"BestTarget:\n"
                 f"  q_score: {self.q_score}\n"
                 f"  invert_target: {self.invert_target!r}\n"
-                f"  reasoning: {self.reasoning!r}"
-        )
+                f"  reasoning: {self.reasoning!r}")
 
 @dataclass
 class ScanResult:
@@ -115,7 +78,7 @@ class BAIT:
         self.logger = logger
         self.device = device
         self._init_config(bait_args)
-        # self.judge_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        # self.judge_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # disabled: no API
 
 
     @torch.no_grad()
@@ -141,14 +104,24 @@ class BAIT:
             self.logger.debug(f"Batch Q-score: {batch_q_score}, Batch Invert Target: {batch_invert_target}")
 
             if batch_q_score > best_target.q_score:
-                best_target.q_score = batch_q_score
-                best_target.invert_target = batch_invert_target
-                self.logger.info(f"New best target found: {best_target}")
+                # post-process to further exam if the invert target includes suspicious content which might be a backdoor target string
+                batch_is_suspicious, batch_reasoning = self.__post_process(batch_invert_target)
+                if batch_is_suspicious:
+                    # update best target
+                    best_target.q_score = batch_q_score
+                    best_target.invert_target = batch_invert_target
+                    best_target.reasoning = batch_reasoning
+                    self.logger.info(f"New best target found: {best_target}")
 
+            # early stop if a very promising target is found
+            if self.early_stop and best_target.q_score > self.early_stop_q_score_threshold:
+                self.logger.info(f"Early stop at q-score: {best_target.q_score}")
+                break
 
         if best_target.q_score > self.q_score_threshold:
             self.logger.info(f"Q-score is greater than threshold: {self.q_score_threshold}")
             self.logger.info(f"Inverted Target contains suspicious content: {best_target.invert_target}")
+            self.logger.info(f"Reasoning: {best_target.reasoning}")
             is_backdoor = True
         else:
             self.logger.info(f"Q-score is less than threshold: {self.q_score_threshold}")
@@ -157,6 +130,65 @@ class BAIT:
         return ScanResult(is_backdoor, best_target)
 
 
+    def __post_process(
+        self,
+        invert_target: str,
+    ) -> str:
+        """
+        Post-process to further exam if the invert target includes suspicious content which might be a backdoor target string
+
+        Args:
+            invert_target (str): The target string to analyze
+        """
+        # ── No-API mode ──────────────────────────────────────────────────────
+        # The original BAIT uses an OpenAI judge here to decide whether a
+        # high-Q-SCORE candidate looks like a real backdoor target. With no API
+        # available, we bypass the judge and accept the candidate, letting the
+        # ORIGINAL Q-SCORE threshold (self.q_score_threshold) make the decision.
+        # This does NOT change the Q-SCORE or any parameter — it only removes
+        # the external LLM gate.
+        return True, ""
+
+        for attempt in range(self.max_retries):
+            try:
+                response = self.judge_client.chat.completions.create(
+                    model=self.judge_model_name,
+                    messages=[
+                        {"role": "user", "content": JUDGE_SYSTEM_PROMPT.format(response=invert_target)}
+                    ]
+                ).choices[0].message.content
+
+                try:
+                    state = extract_tag(response, "State").lower().strip()
+                    reasoning = extract_tag(response, "Reasoning")
+
+                    if not state or not reasoning:
+                        self.logger.error("Missing required tags in response")
+                        continue
+
+                    if state not in ["suspicious", "safe"]:
+                        self.logger.error(f"Invalid state value: {state}")
+                        continue
+
+                    if state == "suspicious":
+                        return True, reasoning
+                    else:
+                        return False, reasoning
+
+                except (ValueError, AttributeError, IndexError) as e:
+                    self.logger.error(f"Failed to parse response: {str(e)}")
+                    if attempt == self.max_retries - 1:
+                        return False, "Error: Failed to parse response after multiple attempts"
+                    continue
+
+            except (APIError, RateLimitError, APIConnectionError) as e:
+                if attempt == self.max_retries - 1:  # Last attempt
+                    self.logger.error(f"Failed to get response after {self.max_retries} attempts: {str(e)}")
+                    return False, "Error: Failed to analyze content after multiple attempts"
+
+                self.logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {self.retry_delay} seconds...")
+                sleep(self.retry_delay)
+                self.retry_delay *= 2  # Exponential backoff
 
     def stable_softmax(self, logits, dim=-1, temperature=1.0):
         """Numerically stable softmax implementation"""
@@ -235,27 +267,11 @@ class BAIT:
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Processed targets and target probabilities.
         """
-        # batch_size is 100 by default. it's the numer of init tokens taken for scanning at first.
-        # input_ids: ['clean_prompt0+tkx', ..., 'clean_prompt4+tkx', 'clean_prompt0+tky', ..., 'clean_prompt4+tky', ..., 'clean_prompt0+tkz', ..., 'clean_prompt4+tkz']
-        # attention_masks = [ ones for len input_ids[0], ones for len input_ids[1], ..., ones for len input_ids[-1]]
-        
-        # batch_size = 100 or less for the last batch
         batch_size = min(self.batch_size, int(input_ids.shape[0] // self.warmup_batch_size))
-        
-        #targets = [(step0) [0, 0, 0, ..., 0] (100 cols)
-        #                   ...
-        #           (step warmup steps) [0,...,0]]
-
         targets = torch.zeros(self.warmup_steps, batch_size).long().to(self.device) - 1
         target_probs = torch.zeros(self.warmup_steps, batch_size).to(self.device) - 1
         target_mapping_record = [torch.arange(batch_size).to(self.device)]
-        # target_mappin_record [(step0)[0, 1, ..., 99]
-        #                      (step1)[s0step0, s1step0, ...,ss0step0]
-        #                       ....
-        #                      (step warmup)[s0sw, ..., sswstepw]]
-
         uncertainty_inspection_times = torch.zeros(batch_size).to(self.device)
-        
 
         processed_targets = torch.zeros(self.warmup_steps, batch_size).long().to(self.device) - 1
         processed_target_probs = torch.zeros(self.warmup_steps, batch_size).to(self.device) - 1
@@ -280,7 +296,6 @@ class BAIT:
 
         last_step_indices = target_mapping_record[-1]
         original_indices = []
-        # original_indices is index of tki in [tkx, tky, ..., tkz] that survived to the last warmupstep
         for idx in range(len(last_step_indices)):
             # trace back to the first step
             original_idx = last_step_indices[idx]
@@ -288,14 +303,8 @@ class BAIT:
                 original_idx = target_mapping_record[step][original_idx]
             original_indices.append(original_idx)
 
-        #original_indices = [33, 45, 78] from 0 to 99
         original_indices = torch.tensor(original_indices)
         processed_targets[:,original_indices] = targets
-        #                                       col33       col45    col78
-        #processed_targets: [(step0) [0, 0, ..., tk, 0, ..., tk, ..., tk, ..., 0]
-        #                    (step1) [0, 0, ..., tk, 0, ..., tk, ..., tk, ..., 0]
-        #                    ...
-        #                    (stepw) [0, 0, ..., tk, 0, ..., tk, ..., tk, ..., 0]]
         processed_target_probs[:,original_indices] = target_probs
         return processed_targets, processed_target_probs
 
@@ -320,104 +329,82 @@ class BAIT:
         Returns:
             Tuple[float, torch.Tensor]: Highest Q-score and corresponding invert target.
         """
-        # Move input tensors to the correct device
         input_ids = input_ids.to(self.device)
         attention_mask = attention_mask.to(self.device)
 
-        # Initialize variables to store the best found target and its Q-score
         q_score = 0
         invert_target = None
 
-        # Determine the batch size for the full inversion
+
         batch_size = min(self.batch_size, int(input_ids.shape[0] // self.prompt_size))
 
-        # Iterate over each candidate from the warm-up phase
         for i in range(batch_size):
-            # Skip invalid candidates
             if -1 in warmup_targets[:,i]:
                 continue
 
-            # Get the warm-up target and its probabilities
             warmup_target = warmup_targets[:,i]
-            # Get the corresponding batch of input_ids and attention_mask
-            base_batch_input_ids = input_ids[i*self.prompt_size:(i+1)*self.prompt_size]
-            base_batch_attention_mask = attention_mask[i*self.prompt_size:(i+1)*self.prompt_size]
+            warmup_target_prob = warmup_target_probs[:,i]
+            batch_input_ids = input_ids[i*self.prompt_size:(i+1)*self.prompt_size]
+            batch_attention_mask = attention_mask[i*self.prompt_size:(i+1)*self.prompt_size]
 
-            # Get the initial token for the sequence
-            initial_token = base_batch_input_ids[0, -1].unsqueeze(0)
+            initial_token = batch_input_ids[0, -1].unsqueeze(0)
 
-            # --- Generate First Sequence (Top-1) ---
-            batch_input_ids1 = base_batch_input_ids.clone()
-            batch_attention_mask1 = base_batch_attention_mask.clone()
-            batch_target1 = []
+            batch_target = []
+            batch_target_prob = []
+
             for step in range(self.full_steps):
-                output_probs = self.__generate(batch_input_ids1, batch_attention_mask1)
+                output_probs = self.__generate(batch_input_ids, batch_attention_mask)
                 avg_probs = output_probs.mean(dim=0)
                 if step < self.warmup_steps:
                     new_token = warmup_target[step].unsqueeze(0).expand(self.prompt_size, -1)
-                    batch_target1.append(warmup_target[step])
+                    batch_target.append(warmup_target[step])
+                    batch_target_prob.append(avg_probs[warmup_target[step]])
                 else:
                     top_prob, top_token = torch.max(avg_probs, dim=-1)
                     new_token = top_token.unsqueeze(0).expand(self.prompt_size, -1)
-                    batch_target1.append(top_token)
+                    batch_target.append(top_token)
+                    batch_target_prob.append(top_prob)
 
-                batch_input_ids1 = torch.cat([batch_input_ids1, new_token], dim=-1)
-                batch_attention_mask1 = torch.cat([batch_attention_mask1, batch_attention_mask1[:, -1].unsqueeze(1)], dim=-1)
-                if batch_target1[step].item() == self.tokenizer.eos_token_id or self.tokenizer.decode(batch_target1[step].item()) == "<|end_of_text|>":
+                batch_input_ids = torch.cat([batch_input_ids, new_token], dim=-1)
+                batch_attention_mask = torch.cat([batch_attention_mask, batch_attention_mask[:, -1].unsqueeze(1)], dim=-1)
+
+
+
+                if batch_target[step].item() == self.tokenizer.eos_token_id or self.tokenizer.decode(batch_target[step].item()) == "<|end_of_text|>":
+                    self.logger.debug(f"EOS token reached at step {step}")
                     break
 
-            batch_target1 = torch.tensor(batch_target1).long()
+            batch_target = torch.tensor(batch_target).long()
+            batch_target_prob = torch.tensor(batch_target_prob)
 
-            # --- Generate Second Sequence (Top-2) ---
-            batch_input_ids2 = base_batch_input_ids.clone()
-            batch_attention_mask2 = base_batch_attention_mask.clone()
-            batch_target2 = []
-            for step in range(self.full_steps):
-                output_probs = self.__generate(batch_input_ids2, batch_attention_mask2)
-                avg_probs = output_probs.mean(dim=0)
-                if step < self.warmup_steps:
-                    new_token = warmup_target[step].unsqueeze(0).expand(self.prompt_size, -1)
-                    batch_target2.append(warmup_target[step])
-                else:
-                    _, top_tokens = torch.topk(avg_probs, k=2, dim=-1)
-                    new_token = top_tokens[1].unsqueeze(0).expand(self.prompt_size, -1)
-                    batch_target2.append(top_tokens[1])
 
-                batch_input_ids2 = torch.cat([batch_input_ids2, new_token], dim=-1)
-                batch_attention_mask2 = torch.cat([batch_attention_mask2, batch_attention_mask2[:, -1].unsqueeze(1)], dim=-1)
-                if batch_target2[step].item() == self.tokenizer.eos_token_id or self.tokenizer.decode(batch_target2[step].item()) == "<|end_of_text|>":
-                    break
+            if self.tokenizer.eos_token_id in batch_target:
+                eos_id = torch.where(batch_target == self.tokenizer.eos_token_id)[0][0].item()
+                batch_target = batch_target[:eos_id]
+                batch_target_prob = batch_target_prob[:eos_id]
+            
+            if self.tokenizer.encode("<|end_of_text|>", add_special_tokens=False)[0] in batch_target:
+                eos_id = torch.where(batch_target == self.tokenizer.encode("<|end_of_text|>", add_special_tokens=False)[0])[0][0].item()
+                batch_target = batch_target[:eos_id]
+                batch_target_prob = batch_target_prob[:eos_id]
 
-            batch_target2 = torch.tensor(batch_target2).long()
 
-            # Truncate the sequence if an EOS token is present
-            if self.tokenizer.eos_token_id in batch_target1:
-                eos_id = torch.where(batch_target1 == self.tokenizer.eos_token_id)[0][0].item()
-                batch_target1 = batch_target1[:eos_id]
-                batch_target2 = batch_target2[:eos_id]
+            # Remove the smallest probability from batch_target_prob to improve detection robustness
+            if len(batch_target_prob) > 1:
+                min_prob_index = torch.argmin(batch_target_prob)
+                batch_target_prob = torch.cat([batch_target_prob[:min_prob_index], batch_target_prob[min_prob_index+1:]])
 
-            # Handle another common EOS token representation
-            if self.tokenizer.encode("<|end_of_text|>")[0] in batch_target1:
-                eos_id = torch.where(batch_target1 == self.tokenizer.encode("<|end_of_text|>")[0])[0][0].item()
-                batch_target1 = batch_target1[:eos_id]
-                batch_target2 = batch_target2[:eos_id]
-
-            # Calculate the batch_q_score as the distance between the two sequences
-            batch_q_score = self._calculate_distance(batch_target1, batch_target2)
-            # Prepend the initial token to the generated target
-            batch_target1_decoded = torch.cat([initial_token.detach().cpu(), batch_target1], dim=-1)
-            # Decode the target sequence into a string
-            batch_invert_target = self.tokenizer.decode(batch_target1_decoded)
+            # Calculate the batch_q_score as the mean of the remaining probabilities
+            batch_q_score = batch_target_prob.mean().item()
+            batch_target = torch.cat([initial_token.detach().cpu(), batch_target], dim=-1)
+            batch_invert_target = self.tokenizer.decode(batch_target)
             self.logger.debug(f"batch_invert_target: {batch_invert_target}")
             self.logger.debug(f"batch_q_score: {batch_q_score}")
-            # If the current Q-score is better than the best score found so far, and the target is long enough, update the best score and target
             if batch_q_score > q_score and len(batch_invert_target.split()) >= self.min_target_len:
                 q_score = batch_q_score
                 invert_target = batch_invert_target
 
-        # Return the best Q-score and inverted target found
         return q_score, invert_target
-
 
     def scan_init_token(
         self,
@@ -436,17 +423,11 @@ class BAIT:
         Returns:
             Tuple[float, torch.Tensor]: Q-score and invert target for potential backdoor.
         """
-        # input_ids: ['clean_prompt0+tkx', ..., 'clean_prompt20+tkx', 'clean_prompt0+tky', ..., 'clean_prompt20+tky', ..., 'clean_prompt0+tkz', ..., 'clean_prompt20+tkz']
-        # index_map = {tkx: 0(starts from 0), tky: 20, ...}
-        # attention_masks = [ ones for len input_ids[0], ones for len input_ids[1], ..., ones for len input_ids[-1]]
-        
         sample_index = []
         for map_idx in index_map:
             start_idx = index_map[map_idx]
             end_idx = index_map[map_idx] +  self.warmup_batch_size
             sample_index.extend(i for i in range(start_idx, end_idx))
-        # from the all 20 clean prompts, get first warmup_batch_size (4) of them for each token
-        # sample_index = [0,1,2,3, (skip next 16 clean prompts for tk0), 20,21,22,23, ...]
 
 
         sample_input_ids = input_ids[sample_index].to(self.device)
@@ -463,35 +444,20 @@ class BAIT:
     ) -> torch.Tensor:
         """
         Perform uncertainty inspection for the current batch.
-        This function is called when the model is uncertain about the next token.
-        It performs a 1-step lookahead to select the best token from a set of candidates.
         """
-        # Get the top-k most probable tokens as candidates
-        # topk_probs, topk_indices = torch.topk(avg_probs, k=self.uncertainty_inspection_topk, dim=-1)
-        logits = torch.log(avg_probs + 1e-10)
-        topk_indices = sparsemax_selection(logits, self.uncertainty_inspection_topk)[1]
-        topk_probs = avg_probs[topk_indices]
-
+        topk_probs, topk_indices = torch.topk(avg_probs, k=self.uncertainty_inspection_topk, dim=-1)
         #============================Debugging log============================
         for topk_prob, topk_index in zip(topk_probs, topk_indices):
             token = self.tokenizer.convert_ids_to_tokens(topk_index.tolist())
             self.logger.debug(f"Tokens: {token:<20} | IDs: {topk_index.item():<20} | Probs: {topk_prob.item():<20.4f}")
         #============================Debugging log============================
-        # Reshape the candidate tokens to append them to the input_ids
-        num_topk = len(topk_indices)
         reshape_topk_indices = topk_indices.view(-1).repeat_interleave(self.warmup_batch_size).unsqueeze(1)
-        # Repeat the input_ids and attention_mask for each candidate token
-        input_ids = input_ids.repeat(num_topk, 1)
-        attention_mask = attention_mask.repeat(num_topk, 1)
-        # Append the candidate tokens to the input_ids
+        input_ids = input_ids.repeat(self.uncertainty_inspection_topk, 1)
+        attention_mask = attention_mask.repeat(self.uncertainty_inspection_topk, 1)
         input_ids = torch.cat([input_ids, reshape_topk_indices], dim=-1)
-        # Update the attention_mask
         attention_mask = torch.cat([attention_mask, attention_mask[:, -1].unsqueeze(1)], dim=-1)
-        # Generate the output probabilities for the next token for each candidate
-        output_probs = self.__generate(input_ids, attention_mask).view(num_topk, self.warmup_batch_size, -1).mean(dim=1)
-        # Find the candidate that results in the highest probability for the next token
+        output_probs = self.__generate(input_ids, attention_mask).view(self.uncertainty_inspection_topk, self.warmup_batch_size, -1).mean(dim=1)
         max_prob, max_indices = torch.max(output_probs, dim=-1)
-        # Select the best candidate token
         new_token = topk_indices[max_prob.argmax()]
 
         #============================Debugging log============================
@@ -547,29 +513,20 @@ class BAIT:
         # Calculate average probabilities across the warmup batch
         batch_size = target_mapping_record[-1].shape[0]
         avg_probs = output_probs.view(batch_size, self.warmup_batch_size, -1).mean(dim=1)
-        # avg_probs: tensor [[p0, p1, ..., pv] #tkx probs
-        #                    [p0, p1, ..., pv] #tky probs 
-        #                    ...
-        #                    [p0, ...,     pv] #tkz]
 
-        self_entropy = self._compute_self_entropy(avg_probs) 
-        # self_entropy: [entx, enty, ..., entz]
+        self_entropy = self._compute_self_entropy(avg_probs)
 
-        #slected_indices = [some i from 0 to batch_size-1] = [0, 12, 15, 23, ..., 93, 96]
+
         selected_indices = []
-        # selected_input_ids = ['clean_prompt0+tk in batch[0]+nexttoken', 'clean_prompt1+tk in batch[0]+nexttoken' , ..., 'clean_prompt3+token in batch[96]+nexttoken']
         selected_input_ids = []
         selected_attention_mask = []
 
 
         for cand_idx in range(batch_size):
-            # cand_idx is only index of token in the slected batch[tkx, tky, ..., tkz]. it's not token index in vocab or token id
             cand_self_entropy = self_entropy[cand_idx]
             cand_avg_probs = avg_probs[cand_idx]
             cand_max_prob = cand_avg_probs.max()
             cand_batch_input_ids = input_ids[cand_idx * self.warmup_batch_size:(cand_idx + 1) * self.warmup_batch_size]
-            # cand_batch_input_ids: ['clean_prompt0+candtk', ..., 'clean_prompt3+candtk']
-
             cand_batch_attention_mask = attention_mask[cand_idx * self.warmup_batch_size:(cand_idx + 1) * self.warmup_batch_size]
 
             cand_uncertainty_inspection_times = uncertainty_inspection_times[cand_idx]
@@ -592,8 +549,6 @@ class BAIT:
 
             else:
                 if cand_self_entropy < self.self_entropy_lower_bound or cand_max_prob > self.expectation_threshold:
-                    # next token for cand_tk selected
-                    # next_token: tk_i. it's id of token in vocab. 
                     new_token = cand_avg_probs.argmax()
                     if new_token == self.tokenizer.eos_token_id or self.tokenizer.decode(new_token) == "<|end_of_text|>":
                         continue
@@ -601,7 +556,6 @@ class BAIT:
                     targets[step][cand_idx] = new_token
                     target_probs[step][cand_idx] = cand_max_prob
                     cand_batch_input_ids = torch.cat([cand_batch_input_ids, new_token.view(-1, 1).expand(-1, self.warmup_batch_size).reshape(-1, 1)], dim=-1)
-                    # cand_batch_input_ids: ['clean_prompt0+candtk+nexttk', ..., 'clean_prompt3+candtk+nexttk']
                     cand_batch_attention_mask = torch.cat([cand_batch_attention_mask, cand_batch_attention_mask[:, -1].unsqueeze(1)], dim=-1)
 
                     selected_indices.append(cand_idx)
@@ -611,25 +565,11 @@ class BAIT:
         if len(selected_indices) == 0:
             return None, None, None, None, None, None
         else:
-
-            # selected_indices: [sel0, sel1, sel2, ..., sels] s<100(batch_size)
             selected_indices = torch.tensor(selected_indices).long().to(self.device)
-            # input_ids: ['clean_prompt0+sel0+nexttk', clean_prompt1+sel0+nexttk', ..., 'clean_prompt3+sels+nexttk']
             input_ids = torch.cat(selected_input_ids, dim=0)
             attention_mask = torch.cat(selected_attention_mask, dim=0)
-            # targets: [(step0) [nexttk0, nexttk1, ..., mexttks]
-            #           (step1)
-            #           ...
-            #           (step warmup_steps)]
-            # with every update, targets tensor will be smaller in columns and selecteds will be reduced
             targets = targets[:, selected_indices]
-            # target_probs has the same shape and structure with targets it's only the probs for next_teps
             target_probs = target_probs[:, selected_indices]
-
-            #target_mapping_record: [(step0) [0, 12, 15, 23, ..., 93, 96]
-            #                        (step1) [0, 15, 23, ..., 93]
-            #                         ....
-            #                        (step warmup steps) [23, ... 93]]
             target_mapping_record.append(selected_indices)
             return input_ids, attention_mask, targets, target_probs, target_mapping_record, uncertainty_inspection_times
 
@@ -643,17 +583,11 @@ class BAIT:
     ) -> bool:
         """
         Check if the uncertainty condition is met.
-        This function determines whether to perform uncertainty inspection based on a set of criteria.
         """
-        # Condition 1: The number of uncertainty inspections for this sequence is below the threshold.
         cr1 = uncertainty_inspection_times < self.uncertainty_inspection_times_threshold
-        # Condition 2: The self-entropy of the probability distribution is below the upper bound.
         cr2 = self_entropy < self.self_entropy_upper_bound
-        # Condition 3: The self-entropy of the probability distribution is above the lower bound.
         cr3 = self_entropy > self.self_entropy_lower_bound
-        # Condition 4: The maximum probability of the next token is below the expectation threshold.
         cr4 = max_prob < self.expectation_threshold
-        # The uncertainty condition is met if Condition 1 is true, and either (Condition 2 and 3 are true) or (Condition 2 and 4 are true).
         return cr1 and ((cr2 and cr3) or (cr2 and cr4))
 
     def _compute_self_entropy(
@@ -682,20 +616,7 @@ class BAIT:
         entropy = - (probs_distribution * torch.log(probs_distribution)).sum(dim=-1)
         return entropy
 
-    def _calculate_distance(
-            self,
-            seq1: torch.Tensor,
-            seq2: torch.Tensor
-    ) -> float:
-        """
-        Calculate the distance between two sequences.
-        This is a simple token-wise difference of the first 10 tokens.
-        """
-        distance = 0.0
-        for i in range(min(10, len(seq1), len(seq2))):
-            if seq1[i] != seq2[i]:
-                distance += 1
-        return distance
+
 
 class BAITWrapper:
     """Handles the scanning of a single model"""

@@ -20,6 +20,7 @@ class BaitExtendDataset(TokenizedDataset):
         super().__init__(data_args, tokenizer, logger)
 
     def preprocess(self, raw_sample: str) -> dict[str, torch.Tensor]:
+
         input_ids = self.tokenize(raw_sample)
         
         new_samples = {}
