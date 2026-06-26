@@ -178,11 +178,18 @@ def load_default_model(base_model: str, cache_dir: str, gpu: int) -> Tuple[trans
     )
 
 
+    # Pin the whole model to the single visible GPU instead of device_map="auto".
+    # "auto" offloads layers to CPU (meta device) when the GPU is momentarily
+    # crowded, which then makes the LoRA adapter dispatch (model.to(device))
+    # crash with "parameters are on the meta device". Placing everything on one
+    # device avoids that. This is a placement fix only — the computation, the
+    # Q-SCORE, and all parameters are unchanged. If the GPU truly lacks memory it
+    # will OOM here (a clear, resumable error) instead of the meta-device crash.
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         cache_dir=cache_dir,
         torch_dtype=torch.float16,
-        device_map="auto"
+        device_map={"": 0},
     )
     return model, tokenizer
 
