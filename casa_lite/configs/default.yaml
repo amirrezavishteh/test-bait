@@ -1,0 +1,66 @@
+# CASA-Lite default configuration (hard-label, text-only scan).
+#
+# Parameters affecting the certified false-positive rate are marked [CERT].
+
+model:
+  kind: local_hf            # local_hf | openai | anthropic
+  name_or_path: ""
+  adapter_path: null
+  cache_dir: null
+  device: cuda
+  gpu: 0
+  dtype: float16
+  max_new_tokens: 64
+  batch_size: 20
+
+similarity:
+  backend: embedding        # embedding | llm_judge | code_ast | hybrid
+  beta: 0.80                # unused by CASA-Lite clustering (see scoring.cluster_beta)
+  embedding_model: all-MiniLM-L6-v2
+  cache_dir: .casa_cache/lite_similarity
+
+seeds:
+  builtin: true             # use the packaged probe bank
+  extra: []                 # additional seed strings
+  seed_file: null           # newline-delimited seed file
+  max_seeds: 0              # 0 = no cap
+
+scan:
+  two_stage: true
+  stage1_prompts: 10        # N1: cheap pruning pass
+  stage1_keep: 10           # seeds carried to stage 2
+  stage2_prompts: 30        # N2: focused final pass
+  max_new_tokens: 64
+  separator: " "
+
+scoring:
+  cluster_beta: 0.80        # [CERT] output-equivalence threshold for clustering
+  delta: 0.05               # [CERT] Hoeffding LCB failure probability
+  min_cluster_size: 2
+
+judges:
+  justify_backend: heuristic   # heuristic | llm
+  harm_backend: heuristic      # heuristic | llm
+  model: gpt-4o-mini
+  justify_unrelated_below: 0.20
+  justify_related_below: 0.45
+  code_mode: false
+  vuln_class: null
+
+conformal:
+  alpha: 0.05               # [CERT] target false-positive rate
+  uncertain_margin: 0.80    # CLEAN below margin*threshold; UNCERTAIN up to threshold
+  threshold: null           # set by calibrate-threshold / artifact
+  artifact_path: .casa_cache/casa_lite_calibration.json
+  fallback_threshold: 0.15  # uncertified default
+
+data:
+  prompt_file: null
+  dataset: alpaca
+  prompt_size: 30
+  max_length: 64
+
+logging:
+  level: INFO
+  json: false
+  max_output_chars: 200

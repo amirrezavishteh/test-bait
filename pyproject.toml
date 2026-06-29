@@ -38,12 +38,13 @@ dev = [
 
 [project.scripts]
 casa = "casa.cli:main"
+casa-lite = "casa_lite.cli:main"
 # Preserve the existing BAIT entry points so this file does not regress them.
 bait-scan = "scripts.scan:main"
 bait-eval = "scripts.eval:main"
 
 [tool.setuptools.packages.find]
-include = ["casa*", "src*", "scripts*"]
+include = ["casa*", "casa_lite*", "src*", "scripts*"]
 
 [tool.mypy]
 python_version = "3.9"
@@ -51,8 +52,8 @@ warn_unused_ignores = false
 warn_redundant_casts = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
-files = ["casa"]
+files = ["casa", "casa_lite"]
 
 [tool.pytest.ini_options]
-testpaths = ["casa/tests"]
+testpaths = ["casa/tests", "casa_lite/tests"]
 addopts = "-q"
