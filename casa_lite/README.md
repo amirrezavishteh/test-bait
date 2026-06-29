@@ -6,6 +6,10 @@ token probabilities — so it runs against pure hard-label APIs where BAIT (need
 logprobs) and even soft-label CASA cannot. See the combined guide
 [../README_CASA.md](../README_CASA.md) for install and full run instructions.
 
+Deeper docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (components, formulas,
+sources), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) (assumptions, per-scenario
+guarantees), [docs/CALIBRATION.md](docs/CALIBRATION.md) (threshold calibration).
+
 ## Core idea
 
 A backdoored model is suspicious when a small candidate **seed** makes outputs
