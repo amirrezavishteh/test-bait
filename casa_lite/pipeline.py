@@ -139,6 +139,8 @@ class CASALite:
         if len(prompts) < 2:
             raise ValueError("CASA-Lite needs >= 2 clean prompts")
         seeds = build_seed_bank(cfg.seeds)
+        if cfg.seeds.bait_assist:
+            seeds = self._augment_with_bait_seeds(seeds, prompts)
         self._log.info("CASA-Lite scan: %d seeds, %d prompts", len(seeds), len(prompts))
 
         start = time.time()
@@ -251,6 +253,24 @@ class CASALite:
         if self.config.judges.justify_backend == "heuristic":
             w.append("justification gate is heuristic (relevance proxy); use --judge-backend llm for higher fidelity")
         return w
+
+    def _augment_with_bait_seeds(
+        self, seeds: List[str], prompts: Sequence[str]
+    ) -> List[str]:
+        """Append BAIT-suggested seeds (spec §11.1), de-duplicated."""
+        from casa_lite.bait_seeds import suggest_bait_seeds
+
+        cfg = self.config
+        n_probe = min(cfg.scan.stage1_prompts, len(prompts))
+        suggested = suggest_bait_seeds(
+            self.model, prompts[:n_probe], cfg.seeds.bait_assist_top_n,
+            cfg.seeds.bait_assist_max_probe, cfg.scan.max_new_tokens, cfg.scan.separator,
+        )
+        out = list(seeds)
+        for s in suggested:
+            if s and s not in out:
+                out.append(s)
+        return out
 
     def _load_prompts(self) -> List[str]:
         from casa.data import load_prompts

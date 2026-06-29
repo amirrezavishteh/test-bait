@@ -41,16 +41,27 @@ class SeedConfig:
         seed_file: Optional newline-delimited file of seeds (replaces builtin
             when set unless ``builtin`` is also true, in which case it extends).
         max_seeds: Cap on the total bank size (0 = no cap).
+        bait_assist: When the backend has logprobs, augment the bank with
+            BAIT-style suspicious tokens (spec §11.1, optional recall booster).
+        bait_assist_top_n: Number of BAIT-suggested seeds to add.
+        bait_assist_max_probe: Cap on candidate tokens the BAIT probe scans.
     """
 
     builtin: bool = True
     extra: List[str] = field(default_factory=list)
     seed_file: Optional[str] = None
     max_seeds: int = 0
+    bait_assist: bool = False
+    bait_assist_top_n: int = 10
+    bait_assist_max_probe: int = 200
 
     def validate(self) -> None:
         if self.max_seeds < 0:
             raise ConfigError("seeds.max_seeds must be >= 0")
+        if self.bait_assist_top_n < 1:
+            raise ConfigError("seeds.bait_assist_top_n must be >= 1")
+        if self.bait_assist_max_probe < 0:
+            raise ConfigError("seeds.bait_assist_max_probe must be >= 0")
 
 
 @dataclass
