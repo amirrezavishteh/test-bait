@@ -50,6 +50,18 @@ dependencies.
 
 ---
 
+## 1a. 60-second offline demo (no GPU / API)
+
+```bash
+python examples/casa_demo.py
+```
+
+Runs **both** detectors on mock clean / fixed-backdoor / multi-target models and
+prints the decision math: CASA's CAH z-score vs the token-level BAIT Q-Score, and
+CASA-Lite's `LCB·U·H` breakdown, plus the spec's §7.3 worked numbers. It shows
+the decisive case — on a 10-paraphrase multi-target backdoor the BAIT Q-Score
+collapses (≈0.15, MISS) while CASA (z≈3.3) and CASA-Lite (≈0.68) both flag.
+
 ## 2. Which one should I run?
 
 - **Only text comes back from the model** (hard-label API, no logprobs) → **CASA-Lite**.
