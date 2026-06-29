@@ -24,6 +24,12 @@ weakness_zoo/models/*/_ckpts/
 /data/
 /results/
 
+# CASA caches / outputs
+.casa_cache/
+casa/**/__pycache__/
+harness_out/
+*.casa.json
+
 # Environment
 .env
 *.env

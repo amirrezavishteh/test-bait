@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "casa-scanner"
+version = "0.1.0"
+description = "CASA — Conformal Anti-hallucination Scanning of Attack-targets: a black-box, conformally-certified backdoor scanner for generative LLMs."
+readme = "casa/README.md"
+requires-python = ">=3.9"
+authors = [{ name = "CASA contributors" }]
+license = { text = "MIT" }
+dependencies = [
+    "pyyaml>=5.4",
+]
+
+[project.optional-dependencies]
+# Local open-weight scanning (the default path).
+local = [
+    "torch",
+    "transformers>=4.38",
+    "peft>=0.9",
+    "sentence-transformers>=2.2",
+    "accelerate",
+    "datasets",
+]
+# Remote API backends and the LLM judge / auditor.
+api = [
+    "openai>=1.3",
+    "tiktoken>=0.5",
+    "anthropic>=0.25",
+]
+dev = [
+    "pytest>=7",
+    "mypy>=1.5",
+    "types-PyYAML",
+]
+
+[project.scripts]
+casa = "casa.cli:main"
+# Preserve the existing BAIT entry points so this file does not regress them.
+bait-scan = "scripts.scan:main"
+bait-eval = "scripts.eval:main"
+
+[tool.setuptools.packages.find]
+include = ["casa*", "src*", "scripts*"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = false
+warn_redundant_casts = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+files = ["casa"]
+
+[tool.pytest.ini_options]
+testpaths = ["casa/tests"]
+addopts = "-q"

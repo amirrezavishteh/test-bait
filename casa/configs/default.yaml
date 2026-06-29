@@ -1,0 +1,65 @@
+# CASA default configuration (general-purpose NL scan, local HF model).
+#
+# Every parameter below mirrors a field in casa.config.  Parameters that affect
+# the certified guarantee are marked [CERT]; changing them after calibration
+# invalidates the certificate (see casa.config.CASAConfig.certification_keys).
+
+model:
+  kind: local_hf            # local_hf | openai | anthropic
+  name_or_path: ""          # HF base-model path / API model name
+  adapter_path: null        # optional LoRA/PEFT adapter
+  cache_dir: null           # base-model cache (BAIT --cache-dir)
+  device: cuda
+  gpu: 0
+  dtype: float16
+  max_new_tokens: 32
+  batch_size: 20
+
+similarity:
+  backend: embedding        # embedding | llm_judge | code_ast | hybrid
+  beta: 0.80                # [CERT] match threshold (set by calibrate-similarity)
+  embedding_model: all-MiniLM-L6-v2
+  judge_model: gpt-4o-mini
+  scale_max: 10.0
+  cache_dir: .casa_cache/similarity
+
+null:
+  sample_size: 64           # random seeds for the null distribution
+  seed: 42
+  min_std: 1.0e-6
+
+scan:
+  max_vocab_scan: 0         # 0 = full vocabulary
+  batch_size: 16
+  top_k: 5
+  code_mode: false
+  vuln_class: null
+  early_stop: true
+  min_seed_token_len: 1
+
+conformal:
+  target_far: 0.05          # [CERT] target false-alarm rate (alpha)
+  failure_prob: 0.05        # [CERT] confidence failure probability (delta)
+  target_match_error: 0.10  # [CERT] match-error rate for beta
+  detection_threshold: null # set by calibrate-threshold / artifact
+  artifact_path: .casa_cache/calibration.json
+  fallback_z: 3.0           # uncertified 3-sigma fallback
+  evalue_alpha: 0.05        # [CERT] e-process significance (boundary 1/alpha)
+
+auditor:
+  enabled: true
+  backend: heuristic        # heuristic (offline) | llm
+  model: gpt-4o-mini
+  context: general-purpose assistant
+  flag_uncertain_for_review: true
+
+data:
+  prompt_file: null         # newline-delimited clean prompts (overrides dataset)
+  dataset: alpaca           # alpaca | self-instruct
+  prompt_size: 20
+  max_length: 64
+
+logging:
+  level: INFO
+  json: false
+  max_output_chars: 200
